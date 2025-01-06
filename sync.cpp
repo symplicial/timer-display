@@ -15,8 +15,30 @@
 #include <iomanip>
 #include <thread>
 
+std::mutex endMutex;
+bool end = false;
+
 std::mutex timerValueMutex;
+std::chrono::time_point<std::chrono::system_clock> timerValueLastUpdate;
 int64_t timerValue;
+int timerValueUncertainty = -99999999;
+
+std::mutex timerPhaseMutex;
+TimerPhase timerPhase = TimerPhase::NotRunning;
+
+std::mutex deltaMutex;
+bool hasDelta = false;
+int64_t delta = 0;
+
+std::mutex pbSplitTimeMutex;
+bool hasPbSplitTime = false;
+int64_t pbSplitTime = 0;
+
+std::mutex sobMutex;
+int64_t sob;
+
+std::mutex bptMutex;
+int64_t bpt;
 
 // LiveSplit sends times using the "constant" ("c") standard TimeSpan format:
 // https://learn.microsoft.com/en-us/dotnet/standard/base-types/standard-timespan-format-strings#the-constant-c-format-specifier 
@@ -63,8 +85,19 @@ int64_t parseTimespan(std::string str) {
     return sign * (ms + (seconds * 1000) + (mins * 1000 * 60) + (hrs * 1000 * 60 * 60) + (days * 1000 * 60 * 60 * 24));
 }
 
+TimerPhase parseTimerPhase(std::string str) {
+    if (str == "NotRunning\n")
+        return TimerPhase::NotRunning;
+    else if (str == "Running\n")
+        return TimerPhase::Running;
+    else if (str == "Ended\n")
+        return TimerPhase::Ended;
+    else if (str == "Paused\n")
+        return TimerPhase::Paused;
+    return TimerPhase::NotRunning;
+}
 
-void syncTask() {
+void timerValueSyncTask() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
 
     sockaddr_in server;
@@ -76,7 +109,13 @@ void syncTask() {
     int res = connect(sock, (const sockaddr *)&server, sizeof(server));
 
     while (true) {
-        const auto t1 = std::chrono::system_clock::now();
+        {
+            std::lock_guard<std::mutex> guard(endMutex);
+            if (end)
+                break;
+        }
+
+        auto t1 = std::chrono::system_clock::now();
         const char *msg = "getcurrenttime\r\n";
         send(sock, msg, strlen(msg), 0);
 
@@ -85,27 +124,251 @@ void syncTask() {
         n = recv(sock, buf, 63, 0);
         const auto t2 = std::chrono::system_clock::now();
 
+        int newUncertainty = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+
         buf[n] = '\0';
+
+        int64_t newTimerValue = parseTimespan(std::string(buf));
+
+        /* If the timer is not running, we are 100% certain this is the actual value. */
+        TimerPhase phase;
+        {
+            std::lock_guard<std::mutex> guard(timerPhaseMutex);
+            phase = timerPhase;
+        }
+
+        /* Only change the value if the new value cannot be explained by the lengths of the requests, i.e. a reset, pause, or correcting a big error. */
         {
             std::lock_guard<std::mutex> guard(timerValueMutex);
-            timerValue = parseTimespan(std::string(buf));
+            if (phase == TimerPhase::Running) {
+                int correction = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - timerValueLastUpdate).count();
+                int64_t correctedTimerValue = timerValue + correction;
+                if (abs(correctedTimerValue - newTimerValue) >= timerValueUncertainty + newUncertainty + 5) {
+                    timerValue = newTimerValue;
+                    timerValueUncertainty = newUncertainty;
+                    timerValueLastUpdate = std::chrono::system_clock::now();
+                }
+            } else {
+                timerValue = newTimerValue;
+                timerValueUncertainty = -9999999;
+                timerValueLastUpdate = std::chrono::system_clock::now();
+            }
         }
-        //printf("got message: %s\n", buf);
-        //printf("time: %lld\n", parseTimespan(std::string(buf)));
 
-        auto diff = t2 - t1;
-        //std::cout << std::chrono::duration_cast<std::chrono::microseconds>(diff).count() << "\n";
-
-        auto t1c = std::chrono::system_clock::to_time_t(t1);
-        //std::cout << std::put_time(std::localtime(&t1c), "%c") << "\n";
-
-        auto t = std::chrono::system_clock::now();
-        t += std::chrono::milliseconds(100);
-        std::this_thread::sleep_until(t);
+        t1 += std::chrono::milliseconds(100);
+        std::this_thread::sleep_until(t1);
     }
 
     close(sock);
 }
 
+void timerPhaseSyncTask() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
 
+    sockaddr_in server;
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(16834);
+    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+
+    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+
+    while (true) {
+        {
+            std::lock_guard<std::mutex> guard(endMutex);
+            if (end)
+                break;
+        }
+
+        auto t1 = std::chrono::system_clock::now();
+        const char *msg = "getcurrenttimerphase\r\n";
+        send(sock, msg, strlen(msg), 0);
+
+        char buf[64];
+        int n;
+        n = recv(sock, buf, 63, 0);
+        buf[n] = '\0';
+        TimerPhase newPhase = parseTimerPhase(std::string(buf));
+        
+        {
+            std::lock_guard<std::mutex> guard(timerPhaseMutex);
+            timerPhase = newPhase;
+        }
+
+        t1 += std::chrono::milliseconds(100);
+        std::this_thread::sleep_until(t1);
+    }
+
+    close(sock);
+}
+
+void sobSyncTask() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    sockaddr_in server;
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(16834);
+    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+
+    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+
+    while (true) {
+        {
+            std::lock_guard<std::mutex> guard(endMutex);
+            if (end)
+                break;
+        }
+
+        auto t1 = std::chrono::system_clock::now();
+        const char *msg = "getfinaltime Best Segments\r\n";
+        send(sock, msg, strlen(msg), 0);
+
+        char buf[64];
+        int n;
+        n = recv(sock, buf, 63, 0);
+        buf[n] = '\0';
+
+        int64_t newSob = parseTimespan(std::string(buf));
+
+        {
+            std::lock_guard<std::mutex> guard(sobMutex);
+            sob = newSob;
+        }
+
+        t1 += std::chrono::milliseconds(1000);
+        std::this_thread::sleep_until(t1);
+    }
+
+    close(sock);
+}
+
+void bptSyncTask() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    sockaddr_in server;
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(16834);
+    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+
+    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+
+    while (true) {
+        {
+            std::lock_guard<std::mutex> guard(endMutex);
+            if (end)
+                break;
+        }
+
+        auto t1 = std::chrono::system_clock::now();
+        const char *msg = "getbestpossibletime\r\n";
+        send(sock, msg, strlen(msg), 0);
+
+        char buf[64];
+        int n;
+        n = recv(sock, buf, 63, 0);
+        buf[n] = '\0';
+
+        int64_t newBpt = parseTimespan(std::string(buf));
+
+        {
+            std::lock_guard<std::mutex> guard(bptMutex);
+            bpt = newBpt;
+        }
+
+        t1 += std::chrono::milliseconds(1000);
+        std::this_thread::sleep_until(t1);
+    }
+
+    close(sock);
+}
+
+void deltaSyncTask() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    sockaddr_in server;
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(16834);
+    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+
+    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+
+    while (true) {
+        {
+            std::lock_guard<std::mutex> guard(endMutex);
+            if (end)
+                break;
+        }
+
+        auto t1 = std::chrono::system_clock::now();
+        const char *msg = "getdelta Personal Best\n";
+        send(sock, msg, strlen(msg), 0);
+
+        char buf[64];
+        int n;
+        n = recv(sock, buf, 63, 0);
+        buf[n] = '\0';
+
+        std::string result(buf);
+        if (result == "-\n") {
+            std::lock_guard<std::mutex> guard(deltaMutex);
+            hasDelta = false;
+        } else {
+            std::lock_guard<std::mutex> guard(deltaMutex);
+            delta = parseTimespan(result);
+            hasDelta = true;
+        }
+
+        t1 += std::chrono::milliseconds(100);
+        std::this_thread::sleep_until(t1);
+    }
+
+    close(sock);
+}
+
+void pbSplitTimeSyncTask() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    sockaddr_in server;
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(16834);
+    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+
+    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+
+    while (true) {
+        {
+            std::lock_guard<std::mutex> guard(endMutex);
+            if (end)
+                break;
+        }
+
+        auto t1 = std::chrono::system_clock::now();
+        const char *msg = "getcomparisonsplittime Personal Best\n";
+        send(sock, msg, strlen(msg), 0);
+
+        char buf[64];
+        int n;
+        n = recv(sock, buf, 63, 0);
+        buf[n] = '\0';
+
+        std::string result(buf);
+        if (result == "-\n") {
+            std::lock_guard<std::mutex> guard(pbSplitTimeMutex);
+            hasPbSplitTime = false;
+        } else {
+            std::lock_guard<std::mutex> guard(pbSplitTimeMutex);
+            pbSplitTime = parseTimespan(result);
+            hasPbSplitTime = true;
+        }
+
+        t1 += std::chrono::milliseconds(100);
+        std::this_thread::sleep_until(t1);
+    }
+
+    close(sock);
+}
 
