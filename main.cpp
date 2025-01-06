@@ -307,7 +307,7 @@ int main() {
     /* Load the bitmap font */
     for (auto const &[c, filename] : bitmapFontFiles) {
         Bitmap bitmap;
-        bitmap.data = stbi_load(("font/" + filename).c_str(), &bitmap.width, &bitmap.height, &bitmap.channels, 0);
+        bitmap.data = stbi_load(("/home/pi/timer-display/font/" + filename).c_str(), &bitmap.width, &bitmap.height, &bitmap.channels, 0);
         bitmapFont[c] = bitmap;
     }
 
