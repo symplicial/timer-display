@@ -40,6 +40,13 @@ int64_t sob;
 std::mutex bptMutex;
 int64_t bpt;
 
+std::mutex bestDeltaMutex;
+bool isGold = false;
+bool hasPreviousBestDelta = false;
+int64_t previousBestDelta = 0;
+bool hasBestDelta = false;
+int64_t bestDelta = 0;
+
 // LiveSplit sends times using the "constant" ("c") standard TimeSpan format:
 // https://learn.microsoft.com/en-us/dotnet/standard/base-types/standard-timespan-format-strings#the-constant-c-format-specifier 
 // [-][d.]hh:mm:ss[.fffffff]
@@ -363,6 +370,58 @@ void pbSplitTimeSyncTask() {
             std::lock_guard<std::mutex> guard(pbSplitTimeMutex);
             pbSplitTime = parseTimespan(result);
             hasPbSplitTime = true;
+        }
+
+        t1 += std::chrono::milliseconds(100);
+        std::this_thread::sleep_until(t1);
+    }
+
+    close(sock);
+}
+
+void bestDeltaSyncTask() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    sockaddr_in server;
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(16834);
+    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+
+    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+
+    while (true) {
+        {
+            std::lock_guard<std::mutex> guard(endMutex);
+            if (end)
+                break;
+        }
+
+        auto t1 = std::chrono::system_clock::now();
+        const char *msg = "getdelta Best Segments\n";
+        send(sock, msg, strlen(msg), 0);
+
+        char buf[64];
+        int n;
+        n = recv(sock, buf, 63, 0);
+        buf[n] = '\0';
+
+        std::string result(buf);
+        {
+            std::lock_guard<std::mutex> guard(bestDeltaMutex);
+            hasPreviousBestDelta = hasBestDelta;
+            previousBestDelta = bestDelta;
+            if (result == "-\n") {
+                hasBestDelta = false;
+            } else {
+                bestDelta = parseTimespan(result);
+                hasBestDelta = true;
+            }
+            /* A gold occurs when the delta vs best segments decreases (or it is negative). It goes away if the delta increases or there is no delta. */
+            if ((hasPreviousBestDelta && hasBestDelta && bestDelta < previousBestDelta) || (hasBestDelta && bestDelta < 0))
+                isGold = true;
+            if (!hasBestDelta || (hasBestDelta && hasPreviousBestDelta && bestDelta > previousBestDelta))
+                isGold = false;
         }
 
         t1 += std::chrono::milliseconds(100);

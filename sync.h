@@ -41,5 +41,9 @@ extern std::mutex bptMutex;
 extern int64_t bpt;
 void bptSyncTask();
 
+extern std::mutex bestDeltaMutex;
+extern bool isGold;
+void bestDeltaSyncTask();
+
 #endif
 

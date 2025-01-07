@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <string>
 #include <map>
+#include <vector>
 #include <chrono>
 #include <thread>
 #include <signal.h>
@@ -133,6 +134,9 @@ struct Bitmap {
 };
 
 std::map<char, Bitmap> bitmapFont;
+std::vector<Bitmap> fireworkFrames;
+const int fireworkLoopLength = 300;
+const int fireworkLoopPoint = 150;
 
 
 
@@ -237,7 +241,38 @@ int writeChar(char c, int x, int y, uint32_t color) {
     return bitmap.width;
 }
 
+int writeChar(char c, int x, int y, uint32_t (* color)(int, int)) {
+    const Bitmap &bitmap = bitmapFont[c];
+    if (x >= 32 || x + bitmap.width <= 0)
+        return bitmap.width;
+    for (int i = 0; i < bitmap.width; ++i) {
+        for (int j = 0; j < bitmap.height; ++j) {
+            if (bitmap.get(i, j) != 0)
+                set(x + i, y + j, color(x + i, y + j));
+        }
+    }
+    return bitmap.width;
+}
+
+void drawFireworkFrame(int frame) {
+    const Bitmap &bitmap = fireworkFrames[frame];
+    for (int i = 0; i < 32; ++i) {
+        for (int j = 0; j < 16; ++j) {
+            unsigned char r = bitmap.data[((j * 32) + i) * 3];
+            unsigned char g = bitmap.data[(((j * 32) + i) * 3) + 1];
+            unsigned char b = bitmap.data[(((j * 32) + i) * 3) + 2];
+            set(i, j, (r << 16) + (g << 8) + b);   
+        }
+    }
+}
+
 void writeLine(std::string text, int x, int y, uint32_t color) {
+    int offset = x;
+    for (const char &c : text)
+        offset += writeChar(c, offset, y, color) + 1; 
+}
+
+void writeLine(std::string text, int x, int y, uint32_t (* color)(int, int)) {
     int offset = x;
     for (const char &c : text)
         offset += writeChar(c, offset, y, color) + 1; 
@@ -256,6 +291,10 @@ void writeLineAlignRight(std::string text, int x, int y, uint32_t color) {
     writeLine(text, x - lineWidth(text), y, color);
 }
 
+void writeLineAlignRight(std::string text, int x, int y, uint32_t (* color)(int, int)) {
+    writeLine(text, x - lineWidth(text), y, color);
+}
+
 void border(uint32_t color) {
     for (int i = 0; i < 32; ++i) {
         set(i, 0, color);
@@ -268,6 +307,25 @@ void border(uint32_t color) {
     for (int i = 1; i < 15; ++i) {
         set(0, i, color);
         set(31, i, color);
+        if (i > 1 && i < 14) {
+            set(1, i, 0);
+            set(30, i, 0);
+        }
+    }
+}
+
+void border(uint32_t (* color)(int, int)) {
+    for (int i = 0; i < 32; ++i) {
+        set(i, 0, color(i, 0));
+        set(i, 15, color(i, 15));
+        if (i > 0 && i < 31) {
+            set(i, 1, 0);
+            set(i, 14, 0);
+        }
+    }
+    for (int i = 1; i < 15; ++i) {
+        set(0, i, color(0, i));
+        set(31, i, color(31, i));
         if (i > 1 && i < 14) {
             set(1, i, 0);
             set(30, i, 0);
@@ -303,12 +361,29 @@ void updateScrollingMessage() {
     }
 }
 
+int goldAnimFrame = 0;
+uint32_t colorGold(int x, int y) {
+    if ((x + y + goldAnimFrame + 3) % 150 < 3)
+        return 0x00F7ECC5;
+    else
+        return goldColor;
+}
+
+bool isPb = false;
+
 int main() {
     /* Load the bitmap font */
     for (auto const &[c, filename] : bitmapFontFiles) {
         Bitmap bitmap;
         bitmap.data = stbi_load(("/home/pi/timer-display/font/" + filename).c_str(), &bitmap.width, &bitmap.height, &bitmap.channels, 0);
         bitmapFont[c] = bitmap;
+    }
+
+    /* Load the firework video */
+    for (int i = 0; i < fireworkLoopLength; ++i) {
+        Bitmap bitmap;
+        bitmap.data = stbi_load(("/home/pi/timer-display/fireworks/" + std::to_string(i) + ".png").c_str(), &bitmap.width, &bitmap.height, &bitmap.channels, 0);
+        fireworkFrames.push_back(bitmap);
     }
 
     /* Setup SIGTERM and SIGINT handler */
@@ -325,6 +400,7 @@ int main() {
     std::thread pbSplitTimeThread(pbSplitTimeSyncTask);
     std::thread sobThread(sobSyncTask);
     std::thread bptThread(bptSyncTask);
+    std::thread bestDeltaThread(bestDeltaSyncTask);
 
     ws2811_return_t result = ws2811_init(&leds);
     if (result != WS2811_SUCCESS) {
@@ -335,6 +411,7 @@ int main() {
     updateScrollingMessage();
 
     int i = 0;
+    int frame = 0;
     while (true) {
         {
             std::lock_guard<std::mutex> guard(endMutex);
@@ -376,21 +453,46 @@ int main() {
             _hasPbSplitTime = hasPbSplitTime;
             _pbSplitTime = pbSplitTime;
         }
+        bool gold;
+        {
+            std::lock_guard<std::mutex> guard(bestDeltaMutex);
+            gold = isGold;
+        }
         
         clear();
         uint32_t base = notRunningColor;
-        if ((_hasDelta && _delta > 0) || (_hasPbSplitTime && ms > _pbSplitTime))
+        if ((_hasDelta && _delta > 0) || (_hasPbSplitTime && ms > _pbSplitTime)) {
             base = behindLosingColor;
-        else if (_hasDelta && _delta <= 0) {
-            if (phase == TimerPhase::Ended)
+            isPb = false;
+        } else if (_hasDelta && _delta <= 0) {
+            if (phase == TimerPhase::Ended) {
                 base = PBColor;
-            else
+                if (!isPb) {
+                    // First PB Frame! Set up fireworks.
+                    frame = 0;
+                }
+                isPb = true;
+            } else {
                 base = aheadGainingColor;
+                isPb = false;
+            }
         }
+        if (phase != TimerPhase::Ended)
+            isPb = false;
 
-        writeLineAlignRight(formatTime(ms, true), 30, 2, base);
-        writeLine(scrollingMessage, 32 - scrollOffset, 9, 0x00FFFFFF);
-        border(base);
+        if (isPb)
+            drawFireworkFrame(frame);
+        if (!gold)
+            writeLineAlignRight(formatTime(ms, true), 30, 2, base);
+        else
+            writeLineAlignRight(formatTime(ms, true), 30, 2, colorGold);
+        if (!isPb) {
+            writeLine(scrollingMessage, 32 - scrollOffset, 9, 0x00FFFFFF);
+            if (!gold)
+                border(base);
+            else
+                border(colorGold);
+        }
         result = ws2811_render(&leds);
         if (result != WS2811_SUCCESS)
             printf("Error: %d\n", result);
@@ -406,6 +508,18 @@ int main() {
             }
         }
 
+        if (gold) {
+            goldAnimFrame += 1;
+            if (goldAnimFrame == 150)
+                goldAnimFrame = 0;
+        } else {
+            goldAnimFrame = 0;
+        }
+
+        frame += 1;
+        if (frame == fireworkLoopLength)
+            frame = fireworkLoopPoint;
+
         auto tim = std::chrono::system_clock::now();
         tim += std::chrono::milliseconds(33);
         std::this_thread::sleep_until(tim);
@@ -416,6 +530,7 @@ int main() {
     pbSplitTimeThread.join();
     sobThread.join();
     bptThread.join();
+    bestDeltaThread.join();
     clear();
     result = ws2811_render(&leds);
     if (result != WS2811_SUCCESS)
