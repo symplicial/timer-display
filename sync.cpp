@@ -15,6 +15,20 @@
 #include <iomanip>
 #include <thread>
 
+sockaddr hostAddr;
+
+int setHostAddr(const char *hostIP, const char *hostPort) {
+    const char *ip = hostIP;
+    int port = std::stoi(std::string(hostPort));
+    memset(&hostAddr, 0, sizeof(hostAddr));
+    sockaddr_in *hostAddrIn = (sockaddr_in *)&hostAddr;
+    hostAddrIn->sin_family = AF_INET;
+    hostAddrIn->sin_port = htons(port);
+    if (inet_pton(AF_INET, ip, &hostAddrIn->sin_addr) != 1)
+        return 1;
+    return 0;
+}
+
 std::mutex endMutex;
 bool end = false;
 
@@ -110,14 +124,7 @@ TimerPhase parseTimerPhase(std::string str) {
 
 void timerValueSyncTask() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-
-    sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(hostPort);
-    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
-
-    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+    int res = connect(sock, &hostAddr, sizeof(sockaddr));
 
     while (true) {
         {
@@ -175,14 +182,7 @@ void timerValueSyncTask() {
 
 void timerPhaseSyncTask() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-
-    sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(hostPort);
-    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
-
-    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+    int res = connect(sock, &hostAddr, sizeof(sockaddr));
 
     while (true) {
         {
@@ -215,14 +215,7 @@ void timerPhaseSyncTask() {
 
 void sobSyncTask() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-
-    sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(hostPort);
-    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
-
-    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+    int res = connect(sock, &hostAddr, sizeof(sockaddr));
 
     while (true) {
         {
@@ -256,14 +249,7 @@ void sobSyncTask() {
 
 void bptSyncTask() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-
-    sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(hostPort);
-    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
-
-    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+    int res = connect(sock, &hostAddr, sizeof(sockaddr));
 
     while (true) {
         {
@@ -297,14 +283,7 @@ void bptSyncTask() {
 
 void deltaSyncTask() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-
-    sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(hostPort);
-    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
-
-    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+    int res = connect(sock, &hostAddr, sizeof(sockaddr));
 
     while (true) {
         {
@@ -341,14 +320,7 @@ void deltaSyncTask() {
 
 void pbSplitTimeSyncTask() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-
-    sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(hostPort);
-    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
-
-    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+    int res = connect(sock, &hostAddr, sizeof(sockaddr));
 
     while (true) {
         {
@@ -385,14 +357,7 @@ void pbSplitTimeSyncTask() {
 
 void bestDeltaSyncTask() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-
-    sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(hostPort);
-    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
-
-    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+    int res = connect(sock, &hostAddr, sizeof(sockaddr));
 
     while (true) {
         {
@@ -437,14 +402,7 @@ void bestDeltaSyncTask() {
 
 void bpeDeltaSyncTask() {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
-
-    sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons(hostPort);
-    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
-
-    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+    int res = connect(sock, &hostAddr, sizeof(sockaddr));
 
     while (true) {
         {

@@ -12,19 +12,16 @@
 #include "sync.h"
 #include "stb_image.h"
 
-std::string hostIP = "192.168.1.115";
-int hostPort = 16834;
-
 /* --- Colors --- */
 uint32_t goldColor = 0x00D8AF1F;
-uint32_t aheadGainingColor = 0x0000CC36;
-uint32_t aheadLosingColor = 0x0052CC73;
-uint32_t behindGainingColor = 0x00CC5C52;
-uint32_t behindLosingColor = 0x00CC1200;
-uint32_t notRunningColor = 0x00ACACAC;
+uint32_t aheadColor = 0x0000CC36;
+uint32_t behindColor = 0x00CC1200;
 uint32_t PBColor = 0x0016A6FF;
-uint32_t pausedColor = 0x007A7A7A;
+uint32_t notRunningColor = 0x00ACACAC;
+uint32_t textColor = 0x00FFFFFF;
+uint32_t whiteColor = 0x00FFFFFF;
 
+#define BLACK_COLOR 0x00000000
 
 
 /* --- Bitmaps --- */
@@ -344,6 +341,92 @@ void border(uint32_t (* color)(int, int)) {
     }
 }
 
+
+
+int goldAnimFrame = 0;
+uint32_t colorGold(int x, int y) {
+    if ((x + y + goldAnimFrame + 3) % 150 < 3)
+        return whiteColor;
+    else
+        return goldColor;
+}
+
+uint32_t colorAhead(int x, int y) {
+    return aheadColor;
+}
+
+uint32_t colorBehind(int x, int y) {
+    return behindColor;
+}
+
+uint32_t colorPB(int x, int y) {
+    return PBColor;
+}
+
+uint32_t colorNotRunning(int x, int y) {
+    return notRunningColor;
+}
+
+uint32_t colorBlack(int x, int y) {
+    return BLACK_COLOR;
+}
+
+uint32_t colorBlend(uint32_t c1, uint32_t c2, float t) {
+    if (t < 0)
+        return c1;
+    if (t > 1)
+        return c2;
+    float r1 = (float)((c1 >> 16) & 0xFF);
+    float r2 = (float)((c2 >> 16) & 0xFF);
+    float g1 = (float)((c1 >> 8) & 0xFF);
+    float g2 = (float)((c2 >> 8) & 0xFF);
+    float b1 = (float)(c1 & 0xFF);
+    float b2 = (float)(c2 & 0xFF);
+    float r = ((1 - t) * r1) + (t * r2);
+    float g = ((1 - t) * g1) + (t * g2);
+    float b = ((1 - t) * b1) + (t * b2);
+    return ((uint32_t)r << 16) + ((uint32_t)g << 8) + (uint32_t)b; 
+}
+
+uint32_t (* lastBaseColor)(int, int) = colorNotRunning;
+uint32_t (* lastBorderColor)(int, int) = colorNotRunning;
+uint32_t (* baseColor)(int, int) = colorNotRunning;
+uint32_t (* borderColor)(int, int) = colorNotRunning;
+float lastMsgBrightness = 1.0f;
+float msgBrightness = 1.0f;
+const int transitionLength = 12;
+int transitionFrame = transitionLength;
+void startTransition(uint32_t (* base)(int, int), uint32_t (* border)(int, int), float msg) {
+    if (baseColor != base || borderColor != border || msgBrightness != msg) {
+        lastBaseColor = baseColor;
+        lastBorderColor = borderColor;
+        baseColor = base;
+        borderColor = border;
+        lastMsgBrightness = msgBrightness;
+        msgBrightness = msg;
+        transitionFrame = 0;
+    }
+}
+
+uint32_t activeBaseColor(int x, int y) {
+    if (transitionFrame < transitionLength)
+        return colorBlend(lastBaseColor(x, y), baseColor(x, y), (float)transitionFrame / (float)transitionLength);
+    else
+        return baseColor(x, y);
+}
+
+uint32_t activeBorderColor(int x, int y) {
+    if (transitionFrame < transitionLength)
+        return colorBlend(lastBorderColor(x, y), borderColor(x, y), (float)transitionFrame / (float)transitionLength);
+    else
+        return borderColor(x, y);
+}
+
+float activeMsgBrightness() {
+    float t = (float)transitionFrame / (float)transitionLength;
+    return ((1.0f - t) * lastMsgBrightness) + (t * msgBrightness);
+}
+
 std::string scrollingMessage = "";
 int scrollSpeed = 5;
 int scrollOffset = 0;
@@ -367,7 +450,7 @@ void updateScrollingMessage() {
         scrollingMessage = "SOB..." + formatTime(sobMs, true);
         msg1 = "SOB...";
         msg2 = formatTime(sobMs, true);
-        msg2Color = 0x00FFFFFF;
+        msg2Color = textColor;
     } else if (msgIndex == 1) {
         // BPT
         int64_t bptMs;
@@ -378,7 +461,7 @@ void updateScrollingMessage() {
         scrollingMessage = "BPT..." + formatTime(bptMs, true);
         msg1 = "BPT...";
         msg2 = formatTime(bptMs, true);
-        msg2Color = 0x00FFFFFF;
+        msg2Color = textColor;
     } else if (msgIndex == 2) {
         // PB Delta
         bool _hasPBDelta;
@@ -397,12 +480,12 @@ void updateScrollingMessage() {
         msg1 = "VS PB...";
         msg2 = deltaStr;
         if (!_hasPBDelta) {
-            msg2Color = 0x00FFFFFF;
+            msg2Color = textColor;
         } else {
             if (_PBDelta > 0)
-                msg2Color = behindLosingColor;
+                msg2Color = behindColor;
             else
-                msg2Color = aheadGainingColor;
+                msg2Color = aheadColor;
         }
     } else if (msgIndex == 3) {
         // BPE Delta
@@ -422,20 +505,19 @@ void updateScrollingMessage() {
         msg1 = "VS BPE...";
         msg2 = deltaStr;
         if (!_hasBPEDelta) {
-            msg2Color = 0x00FFFFFF;
+            msg2Color = textColor;
         } else {
             if (_BPEDelta > 0)
-                msg2Color = behindLosingColor;
+                msg2Color = behindColor;
             else
-                msg2Color = aheadGainingColor;
+                msg2Color = aheadColor;
         }
     }
 }
 
-void drawScrollingMessage() {
-    //writeLine(scrollingMessage, 32 - scrollOffset, 9, 0x00FFFFFF);
-    writeLine(msg1, 32 - scrollOffset, 9, 0x00FFFFFF);
-    writeLine(msg2, 32 - scrollOffset + lineWidth(msg1) + 1, 9, msg2Color);
+void drawScrollingMessage(float brightness) {
+    writeLine(msg1, 32 - scrollOffset, 9, colorBlend(BLACK_COLOR, textColor, brightness));
+    writeLine(msg2, 32 - scrollOffset + lineWidth(msg1) + 1, 9, colorBlend(BLACK_COLOR, msg2Color, brightness));
 
     /* Update scrolling text */
     ++msgFrame;
@@ -449,21 +531,15 @@ void drawScrollingMessage() {
     }
 }
 
-int goldAnimFrame = 0;
-uint32_t colorGold(int x, int y) {
-    if ((x + y + goldAnimFrame + 3) % 150 < 3)
-        return 0x00F7ECC5;
-    else
-        return goldColor;
-}
-
 bool isPb = false;
 
 int main(int argc, char **argv) {
     if (argc < 3)
         return 1;
-    hostIP = std::string(argv[1]);
-    hostPort = std::stoi(std::string(argv[2])); 
+
+    /* TODO: Handle result. */
+    setHostAddr(argv[1], argv[2]);
+
 
     /* Load the bitmap font */
     for (auto const &[c, filename] : bitmapFontFiles) {
@@ -486,7 +562,7 @@ int main(int argc, char **argv) {
     sigaction(SIGTERM, &termAction, NULL);
     sigaction(SIGINT, &termAction, NULL);
 
-    /* Start the sync thread */
+    /* Syncing threads */
     std::thread timerValueThread(timerValueSyncTask);
     std::thread timerPhaseThread(timerPhaseSyncTask);
     std::thread deltaThread(deltaSyncTask);
@@ -553,38 +629,38 @@ int main(int argc, char **argv) {
         }
         
         clear();
-        uint32_t base = notRunningColor;
-        if ((_hasDelta && _delta > 0) || (_hasPbSplitTime && ms > _pbSplitTime)) {
-            base = behindLosingColor;
+        uint32_t (* base)(int, int) = colorNotRunning;
+        if (gold) {
+            base = colorGold;
+        } else if ((_hasDelta && _delta > 0) || (_hasPbSplitTime && ms > _pbSplitTime)) {
+            base = colorBehind;
             isPb = false;
         } else if (_hasDelta && _delta <= 0) {
             if (phase == TimerPhase::Ended) {
-                base = PBColor;
-                if (!isPb) {
-                    // First PB Frame! Set up fireworks.
-                    frame = 0;
-                }
-                isPb = true;
+                base = colorPB;
             } else {
-                base = aheadGainingColor;
+                base = colorAhead;
                 isPb = false;
             }
         }
-        if (phase != TimerPhase::Ended)
+        if (phase == TimerPhase::Ended) {
+            startTransition(base, colorBlack, 0.0f);
+            if (!isPb && transitionFrame >= transitionLength) {
+                // First PB Frame! Set up fireworks.
+                frame = 0;
+                isPb = true;
+            }
+        } else {
+            startTransition(base, base, 1.0f);
             isPb = false;
+        }
 
         if (isPb)
             drawFireworkFrame(frame);
-        if (!gold)
-            writeLineAlignRight(formatTime(ms, true), 30, 2, base);
-        else
-            writeLineAlignRight(formatTime(ms, true), 30, 2, colorGold);
+        writeLineAlignRight(formatTime(ms, true), 30, 2, activeBaseColor);
         if (!isPb) {
-            drawScrollingMessage();
-            if (!gold)
-                border(base);
-            else
-                border(colorGold);
+            drawScrollingMessage(activeMsgBrightness());
+            border(activeBorderColor);
         }
         result = ws2811_render(&leds);
         if (result != WS2811_SUCCESS)
@@ -601,6 +677,10 @@ int main(int argc, char **argv) {
         frame += 1;
         if (frame == fireworkLoopLength)
             frame = fireworkLoopPoint;
+
+        transitionFrame += 1;
+        if (transitionFrame > transitionLength)
+            transitionFrame = transitionLength;
 
         auto tim = std::chrono::system_clock::now();
         tim += std::chrono::milliseconds(33);

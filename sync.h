@@ -1,11 +1,11 @@
 #ifndef SYNC_H
 #define SYNC_H
 
+#include <sys/socket.h>
 #include <mutex>
 #include <chrono>
 
-extern std::string hostIP;
-extern int hostPort;
+int setHostAddr(const char *hostIP, const char *hostPort);
 
 enum TimerPhase {
     NotRunning,
