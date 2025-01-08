@@ -4,6 +4,9 @@
 #include <mutex>
 #include <chrono>
 
+extern std::string hostIP;
+extern int hostPort;
+
 enum TimerPhase {
     NotRunning,
     Running,
@@ -44,6 +47,11 @@ void bptSyncTask();
 extern std::mutex bestDeltaMutex;
 extern bool isGold;
 void bestDeltaSyncTask();
+
+extern std::mutex bpeDeltaMutex;
+extern bool hasBpeDelta;
+extern int64_t bpeDelta;
+void bpeDeltaSyncTask();
 
 #endif
 

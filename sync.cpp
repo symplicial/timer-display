@@ -47,6 +47,10 @@ int64_t previousBestDelta = 0;
 bool hasBestDelta = false;
 int64_t bestDelta = 0;
 
+std::mutex bpeDeltaMutex;
+bool hasBpeDelta = false;
+int64_t bpeDelta = 0;
+
 // LiveSplit sends times using the "constant" ("c") standard TimeSpan format:
 // https://learn.microsoft.com/en-us/dotnet/standard/base-types/standard-timespan-format-strings#the-constant-c-format-specifier 
 // [-][d.]hh:mm:ss[.fffffff]
@@ -110,8 +114,8 @@ void timerValueSyncTask() {
     sockaddr_in server;
     memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
-    server.sin_port = htons(16834);
-    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+    server.sin_port = htons(hostPort);
+    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
 
     int res = connect(sock, (const sockaddr *)&server, sizeof(server));
 
@@ -175,8 +179,8 @@ void timerPhaseSyncTask() {
     sockaddr_in server;
     memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
-    server.sin_port = htons(16834);
-    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+    server.sin_port = htons(hostPort);
+    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
 
     int res = connect(sock, (const sockaddr *)&server, sizeof(server));
 
@@ -215,8 +219,8 @@ void sobSyncTask() {
     sockaddr_in server;
     memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
-    server.sin_port = htons(16834);
-    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+    server.sin_port = htons(hostPort);
+    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
 
     int res = connect(sock, (const sockaddr *)&server, sizeof(server));
 
@@ -256,8 +260,8 @@ void bptSyncTask() {
     sockaddr_in server;
     memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
-    server.sin_port = htons(16834);
-    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+    server.sin_port = htons(hostPort);
+    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
 
     int res = connect(sock, (const sockaddr *)&server, sizeof(server));
 
@@ -297,8 +301,8 @@ void deltaSyncTask() {
     sockaddr_in server;
     memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
-    server.sin_port = htons(16834);
-    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+    server.sin_port = htons(hostPort);
+    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
 
     int res = connect(sock, (const sockaddr *)&server, sizeof(server));
 
@@ -341,8 +345,8 @@ void pbSplitTimeSyncTask() {
     sockaddr_in server;
     memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
-    server.sin_port = htons(16834);
-    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+    server.sin_port = htons(hostPort);
+    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
 
     int res = connect(sock, (const sockaddr *)&server, sizeof(server));
 
@@ -385,8 +389,8 @@ void bestDeltaSyncTask() {
     sockaddr_in server;
     memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
-    server.sin_port = htons(16834);
-    inet_pton(AF_INET, "192.168.1.115", &server.sin_addr);
+    server.sin_port = htons(hostPort);
+    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
 
     int res = connect(sock, (const sockaddr *)&server, sizeof(server));
 
@@ -425,6 +429,50 @@ void bestDeltaSyncTask() {
         }
 
         t1 += std::chrono::milliseconds(100);
+        std::this_thread::sleep_until(t1);
+    }
+
+    close(sock);
+}
+
+void bpeDeltaSyncTask() {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    sockaddr_in server;
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(hostPort);
+    inet_pton(AF_INET, hostIP.c_str(), &server.sin_addr);
+
+    int res = connect(sock, (const sockaddr *)&server, sizeof(server));
+
+    while (true) {
+        {
+            std::lock_guard<std::mutex> guard(endMutex);
+            if (end)
+                break;
+        }
+
+        auto t1 = std::chrono::system_clock::now();
+        const char *msg = "getdelta Best Split Times\n";
+        send(sock, msg, strlen(msg), 0);
+
+        char buf[64];
+        int n;
+        n = recv(sock, buf, 63, 0);
+        buf[n] = '\0';
+
+        std::string result(buf);
+        if (result == "-\n") {
+            std::lock_guard<std::mutex> guard(bpeDeltaMutex);
+            hasBpeDelta = false;
+        } else {
+            std::lock_guard<std::mutex> guard(bpeDeltaMutex);
+            bpeDelta = parseTimespan(result);
+            hasBpeDelta = true;
+        }
+
+        t1 += std::chrono::milliseconds(1000);
         std::this_thread::sleep_until(t1);
     }
 

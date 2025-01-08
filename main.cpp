@@ -12,6 +12,9 @@
 #include "sync.h"
 #include "stb_image.h"
 
+std::string hostIP = "192.168.1.115";
+int hostPort = 16834;
+
 /* --- Colors --- */
 uint32_t goldColor = 0x00D8AF1F;
 uint32_t aheadGainingColor = 0x0000CC36;
@@ -171,6 +174,14 @@ std::string formatTime(int64_t ms, bool displayTenths) {
         return result;
     else
         return "-" + result;
+}
+
+std::string formatDelta(int64_t ms, bool displayTenths) {
+    std::string time = formatTime(ms, displayTenths);
+    if (ms > 0)
+        return "+" + time;
+    else
+        return time;
 }
 
 
@@ -338,9 +349,13 @@ int scrollSpeed = 5;
 int scrollOffset = 0;
 
 int msgIndex = 0;
+int msgFrame = 0;
+std::string msg1;
+std::string msg2;
+uint32_t msg2Color;
 void updateScrollingMessage() {
     msgIndex++;
-    if (msgIndex == 2)
+    if (msgIndex == 4)
         msgIndex = 0;
     if (msgIndex == 0) {
         // SOB
@@ -350,6 +365,9 @@ void updateScrollingMessage() {
             sobMs = sob;
         }
         scrollingMessage = "SOB..." + formatTime(sobMs, true);
+        msg1 = "SOB...";
+        msg2 = formatTime(sobMs, true);
+        msg2Color = 0x00FFFFFF;
     } else if (msgIndex == 1) {
         // BPT
         int64_t bptMs;
@@ -358,6 +376,76 @@ void updateScrollingMessage() {
             bptMs = bpt;
         }
         scrollingMessage = "BPT..." + formatTime(bptMs, true);
+        msg1 = "BPT...";
+        msg2 = formatTime(bptMs, true);
+        msg2Color = 0x00FFFFFF;
+    } else if (msgIndex == 2) {
+        // PB Delta
+        bool _hasPBDelta;
+        int64_t _PBDelta;
+        {
+            std::lock_guard<std::mutex> guard(deltaMutex);
+            _hasPBDelta = hasDelta;
+            _PBDelta = delta;
+        }
+        std::string deltaStr;
+        if (!_hasPBDelta)
+            deltaStr = "-";
+        else
+            deltaStr = formatDelta(_PBDelta, true);
+        scrollingMessage = "VS PB..." + deltaStr;
+        msg1 = "VS PB...";
+        msg2 = deltaStr;
+        if (!_hasPBDelta) {
+            msg2Color = 0x00FFFFFF;
+        } else {
+            if (_PBDelta > 0)
+                msg2Color = behindLosingColor;
+            else
+                msg2Color = aheadGainingColor;
+        }
+    } else if (msgIndex == 3) {
+        // BPE Delta
+        bool _hasBPEDelta;
+        int64_t _BPEDelta;
+        {
+            std::lock_guard<std::mutex> guard(bpeDeltaMutex);
+            _hasBPEDelta = hasBpeDelta;
+            _BPEDelta = bpeDelta;
+        }
+        std::string deltaStr;
+        if (!_hasBPEDelta)
+            deltaStr = "-";
+        else
+            deltaStr = formatDelta(_BPEDelta, true);
+        scrollingMessage = "VS BPE..." + deltaStr;
+        msg1 = "VS BPE...";
+        msg2 = deltaStr;
+        if (!_hasBPEDelta) {
+            msg2Color = 0x00FFFFFF;
+        } else {
+            if (_BPEDelta > 0)
+                msg2Color = behindLosingColor;
+            else
+                msg2Color = aheadGainingColor;
+        }
+    }
+}
+
+void drawScrollingMessage() {
+    //writeLine(scrollingMessage, 32 - scrollOffset, 9, 0x00FFFFFF);
+    writeLine(msg1, 32 - scrollOffset, 9, 0x00FFFFFF);
+    writeLine(msg2, 32 - scrollOffset + lineWidth(msg1) + 1, 9, msg2Color);
+
+    /* Update scrolling text */
+    ++msgFrame;
+    if (msgFrame == scrollSpeed) {
+        msgFrame = 0;
+        scrollOffset += 1;
+        if (scrollOffset > lineWidth(scrollingMessage) + 40) {
+            scrollOffset = 0;
+            updateScrollingMessage();
+        }
     }
 }
 
@@ -371,7 +459,12 @@ uint32_t colorGold(int x, int y) {
 
 bool isPb = false;
 
-int main() {
+int main(int argc, char **argv) {
+    if (argc < 3)
+        return 1;
+    hostIP = std::string(argv[1]);
+    hostPort = std::stoi(std::string(argv[2])); 
+
     /* Load the bitmap font */
     for (auto const &[c, filename] : bitmapFontFiles) {
         Bitmap bitmap;
@@ -401,6 +494,9 @@ int main() {
     std::thread sobThread(sobSyncTask);
     std::thread bptThread(bptSyncTask);
     std::thread bestDeltaThread(bestDeltaSyncTask);
+    std::thread bpeDeltaThread(bpeDeltaSyncTask);
+
+    updateScrollingMessage();
 
     ws2811_return_t result = ws2811_init(&leds);
     if (result != WS2811_SUCCESS) {
@@ -408,9 +504,6 @@ int main() {
         return 1;
     }
 
-    updateScrollingMessage();
-
-    int i = 0;
     int frame = 0;
     while (true) {
         {
@@ -487,7 +580,7 @@ int main() {
         else
             writeLineAlignRight(formatTime(ms, true), 30, 2, colorGold);
         if (!isPb) {
-            writeLine(scrollingMessage, 32 - scrollOffset, 9, 0x00FFFFFF);
+            drawScrollingMessage();
             if (!gold)
                 border(base);
             else
@@ -496,17 +589,6 @@ int main() {
         result = ws2811_render(&leds);
         if (result != WS2811_SUCCESS)
             printf("Error: %d\n", result);
-
-        /* Update scrolling text */
-        ++i;
-        if (i == scrollSpeed) {
-            i = 0;
-            scrollOffset += 1;
-            if (scrollOffset > lineWidth(scrollingMessage) + 40) {
-                scrollOffset = 0;
-                updateScrollingMessage();
-            }
-        }
 
         if (gold) {
             goldAnimFrame += 1;
@@ -525,12 +607,20 @@ int main() {
         std::this_thread::sleep_until(tim);
     }
     timerValueThread.join();
+    usleep(200000);
     timerPhaseThread.join();
+    usleep(200000);
     deltaThread.join();
+    usleep(200000);
     pbSplitTimeThread.join();
+    usleep(200000);
     sobThread.join();
+    usleep(200000);
     bptThread.join();
+    usleep(200000);
     bestDeltaThread.join();
+    usleep(200000);
+    bpeDeltaThread.join();
     clear();
     result = ws2811_render(&leds);
     if (result != WS2811_SUCCESS)
